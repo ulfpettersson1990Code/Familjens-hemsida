@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hemmets översikt</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+ <body>
+  <div id="login-container">
+    <h2>Logga in på Familjen Pettersson Ögrens hem</h2>
+    <input type="email" id="email" placeholder="E-post">
+    <input type="password" id="password" placeholder="Lösenord">
+    <button id="login-btn" class="login-btn">Logga in</button>
+  </div>
+
+  <div id="dashboard-content" style="display:none;">
+    <div class="container">
+      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; max-width: 1200px; margin: 0 auto;">
+        <h1 class="Rubrik">God Dag!</h1>
+        <button id="logout-btn" style="background: rgba(255,255,255,0.1); padding: 8px 15px; font-size: 0.8rem;">Logga ut</button>
+      </div>
+
+      <div class="weather-card card">
+        <div id="weather-icon">--</div>
+        <div id="temp-display">Hämtar väder...</div>
+        <div id="weather-location">Älvsbyn</div>
+      </div>
+
+      <div class="card">
+        <h3>Motorvärmare</h3>
+        <button id="heater-btn" class="btn-off">AV</button>
+      </div>
+
+      <div class="family-card card">
+        <h3>Vilka är hemma?</h3>
+        <div id="family-status-list"></div>
+      </div>
+
+      
+
+      <div class="todo-card card">
+        <h3>Att göra idag</h3>
+        <div class="todo-input-group">
+          <input type="text" id="todo-input" placeholder="Ny uppgift...">
+          <button onclick="addTodo()" class="to-do">Lägg till</button>
+        </div>
+        <ul id="todo-list"></ul>
+      </div>
+    </div>
+  </div> ```
+
+<script type="module">
+  // 1. IMPORTS
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+  import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+  import { firebaseConfig } from './config.js';
+
+  // 2. INITIALISERING
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+  const colRef = collection(db, 'todos');
+  const familyRef = collection(db, 'Familj');
+
+  console.log("JS laddad och Firebase redo!");
+
+  // 3. INLOGGNINGS-LOGIK 
+  const loginBtn = document.getElementById('login-btn');
+  if (loginBtn) {
+    loginBtn.addEventListener('click', () => {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+
+      signInWithEmailAndPassword(auth, email, password)
+        .then(() => console.log("Inloggning lyckades!"))
+        .catch((error) => alert("Fel vid inloggning: " + error.message));
+    });
+  }
+
+  // 4. STATUS-VAKT 
+  onAuthStateChanged(auth, (user) => {
+    const loginCont = document.getElementById('login-container');
+    const dashCont = document.getElementById('dashboard-content');
+    const greetingElement = document.querySelector('.Rubrik');
+
+    if (user) {
+      loginCont.style.display = 'none';
+      dashCont.style.display = 'block';
+
+      if (greetingElement){
+        const hour = new Date().getHours();
+        let greeting = "God dag Familjen!";
+        if (hour >= 5 && hour < 10) greeting = "God Morgon Familjen!";
+        else if (hour >= 18 && hour < 22) greeting = "God Kväll Familjen!";
+        else if (hour >= 22 || hour < 5) greeting = "God Natt Familjen!";
+        
+        greetingElement.textContent = greeting;                      
+      }   
+
+      setupTodoListener();
+      setupFamilyListener();
+      updateWeather();
+    } else {
+      loginCont.style.display = 'block';
+      dashCont.style.display = 'none';
+    }
+  });
+
+  // 5. FUNKTIONER 
+  async function updateWeather() {
+    const tempElement = document.getElementById('temp-display');
+    const iconElement = document.getElementById('weather-icon');
+    const lat = 65.67; const lon = 21.01;
+    const url = `https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/${lon}/lat/${lat}/data.json`;
+    
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
+      const temp = data.timeSeries[0].parameters.find(p => p.name === 't').values[0];
+      
+      // Uppdatera texten
+      tempElement.textContent = `${temp}°C`;
+      iconElement.textContent = temp < 0 ? '❄️' : '☀️';
+
+      // Logik för färger )
+      if (temp <= -20) {
+        tempElement.style.color = '#00f2ff'; 
+        tempElement.style.textShadow = '0 0 10px rgba(0, 242, 255, 0.5)'; 
+      } else if (temp >= 20){
+        tempElement.style.color = '#FFA500'; 
+        tempElement.style.textShadow = '0 0 10px rgba(255, 165, 0, 0.6)'; 
+      } else {
+        tempElement.style.color = '#ffffff'; 
+        tempElement.style.textShadow = '1px 1px 2px rgba(0, 0, 0, 0.8)';
+      }
+    } catch (e) { 
+      console.error("Väderfel:", e); 
+    }
+  }
+
+  function setupFamilyListener() {
+    onSnapshot(familyRef, (snapshot) => {
+      const familyList = document.getElementById('family-status-list');
+      if (!familyList) return;
+      familyList.innerHTML = ''; 
+      snapshot.docs.forEach(docSnap => {
+        const person = docSnap.data();
+        const id = docSnap.id;
+        const displayName = person.Namn || person.name || "Namnlös";
+        const isHomeStatus = person.isHome === true;
+
+        const div = document.createElement('div');
+        div.className = 'person-status';
+        div.innerHTML = `
+          <span style="color: white; font-weight: bold;">${displayName}</span>
+          <label class="switch">
+            <input type="checkbox" ${isHomeStatus ? 'checked' : ''} 
+              onchange="updateHomeStatus('${id}', this.checked)">
+            <span class="slider round"></span>
+          </label>
+        `;
+        familyList.appendChild(div);
+      });
+    });
+  }
+
+  function setupTodoListener() {
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    onSnapshot(q, (snapshot) => {
+      const todoList = document.getElementById('todo-list');
+      if (!todoList) return;
+      todoList.innerHTML = '';
+      snapshot.docs.forEach(docSnap => {
+        const data = docSnap.data();
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <span>${data.text}</span>
+          <button class="done-btn" onclick="deleteTodo('${docSnap.id}')">Klar</button>
+        `;
+        todoList.appendChild(li);
+      });
+    });
+  }
+
+  // 6. GLOBALA FUNKTIONER 
+  window.updateHomeStatus = async (id, status) => {
+    try {
+      await updateDoc(doc(db, 'Familj', id), { isHome: status });
+    } catch (e) { console.error("Update error:", e); }
+  };
+
+  window.addTodo = async () => {
+    const input = document.getElementById('todo-input');
+    if (!input.value.trim()) return;
+    await addDoc(colRef, { text: input.value, createdAt: Date.now() });
+    input.value = '';
+  };
+
+  window.deleteTodo = async (id) => {
+    await deleteDoc(doc(db, 'todos', id));
+  };
+
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => {
+      auth.signOut().then(() => location.reload());
+    });
+  }
+
+  setInterval(updateWeather, 1800000);
+</script>
+  
+</body>
+</html>
