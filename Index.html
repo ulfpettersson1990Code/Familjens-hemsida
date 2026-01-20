@@ -3,10 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <meta name="format-detection" content="telephone=no">
     <title>Hemmets översikt</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="manifest" href="manifest.json"> <meta name="mobile-web-app-capable" content="yes"> ```
 </head>
+
  <body>
   <div id="login-container">
     <h2>Logga in på Familjen Pettersson Ögrens hem</h2>
@@ -31,8 +37,19 @@
       <div class="card">
         <h3>Motorvärmare</h3>
         <button id="heater-btn" class="btn-off">AV</button>
+      
+        <div class="timer-container" style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+        <p id="timer-status" style="font-size: 0.8rem; margin-bottom: 5px;">Ingen timer aktiv</p>
+        <input type="time" id="timer-time" style="padding: 5px; border-radius: 4px; border: none; width: 100px;">
+        <button id="set-timer-btn" class="done-btn" style="margin-left: 5px;">Sätt</button>
+        <button id="cancel-timer-btn" style="display:none; color: #ff6b6b; background:none; border:none; cursor:pointer; font-size: 0.8rem; margin-top: 5px;">Avbryt timer</button>
+        </div>
       </div>
 
+      <div id="weather-alert" class="alert-banner" style="display:none;">
+      ⚠️ Det är kallare än -15°C! Glöm inte motorvärmaren.
+      </div>
+      
       <div class="family-card card">
         <h3>Vilka är hemma?</h3>
         <div id="family-status-list"></div>
@@ -50,12 +67,12 @@
       </div>
     </div>
   </div> ```
-
+  
 <script type="module">
   // 1. IMPORTS
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
   import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-  import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+  import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, updateDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
   import { firebaseConfig } from './config.js';
 
   // 2. INITIALISERING
@@ -64,6 +81,21 @@
   const auth = getAuth(app);
   const colRef = collection(db, 'todos');
   const familyRef = collection(db, 'Familj');
+
+  const heaterBtn = document.getElementById('heater-btn');
+  const heaterDocRef = doc(db, 'Enheter', 'motorvarmare');
+  
+
+  //service worker
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js')
+    .then(() => console.log("Service worker reigistrerad!"))
+    .catch(err => console.log("SW-fel:", err));
+  }
+
+  if (Notification.permission !== "granted") {
+    Notification.requestPermission();
+  }
 
   console.log("JS laddad och Firebase redo!");
 
@@ -99,7 +131,55 @@
         
         greetingElement.textContent = greeting;                      
       }   
+      
+      setupHeaterListner();
 
+const setTimerBtn = document.getElementById('set-timer-btn');
+const cancelTimerBtn = document.getElementById('cancel-timer-btn');
+const timerInput = document.getElementById('timer-time');
+
+if (setTimerBtn) {
+    setTimerBtn.onclick = async () => {
+        const valdTid = timerInput.value;
+        if (!valdTid) return alert("Välj en tid!");
+        
+        await updateDoc(heaterDocRef, {
+            startTimer: valdTid,
+            timerActive: true,
+            status: false 
+        });
+    };
+}
+
+if (cancelTimerBtn) {
+    cancelTimerBtn.onclick = async () => {
+        await updateDoc(heaterDocRef, {
+            timerActive: false
+        });
+    };
+}
+
+      heaterBtn.onclick = async () => {
+  try {
+    const currentStatus = heaterBtn.textContent === "PÅ";
+    console.log("Ändrar status till:", !currentStatus);
+    
+    
+    await updateDoc(heaterDocRef, { 
+      status: !currentStatus 
+    });
+  } catch (error) {
+    
+    console.log("Dokumentet saknades, skapar det nu...");
+    await setDoc(heaterDocRef, { status: true });
+  }
+};
+
+      if (Notification.permission === "default"){
+        startaLarm();
+
+      }
+      
       setupTodoListener();
       setupFamilyListener();
       updateWeather();
@@ -113,19 +193,31 @@
   async function updateWeather() {
     const tempElement = document.getElementById('temp-display');
     const iconElement = document.getElementById('weather-icon');
+    const alertElement = document.getElementById('weather-alert');
     const lat = 65.67; const lon = 21.01;
     const url = `https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/${lon}/lat/${lat}/data.json`;
-    
+    let hasNotifiedToday = false;
+
     try {
       const response = await fetch(url);
       const data = await response.json();
       const temp = data.timeSeries[0].parameters.find(p => p.name === 't').values[0];
+      const currentHour = new Date().getHours();
       
       // Uppdatera texten
       tempElement.textContent = `${temp}°C`;
       iconElement.textContent = temp < 0 ? '❄️' : '☀️';
+      //Logik för varning
+      if (temp <= -15 && currentHour >= 6 && currentHour < 18){
+        alertElement.style.display = 'block';
+        sendNotification(temp);
+        hasNotifiedToday = true;
+      } else{
+        alertElement.style.display = 'none';
+      }
 
-      // Logik för färger )
+      if (currentHour === 0){ hasNotifiedToday = false;}
+      // Logik för färger 
       if (temp <= -20) {
         tempElement.style.color = '#00f2ff'; 
         tempElement.style.textShadow = '0 0 10px rgba(0, 242, 255, 0.5)'; 
@@ -140,6 +232,34 @@
       console.error("Väderfel:", e); 
     }
   }
+
+ function setupHeaterListner() {
+    
+    const timerStatusEl = document.getElementById('timer-status');
+    const cancelBtn = document.getElementById('cancel-timer-btn');
+    const heaterBtn = document.getElementById('heater-btn');
+
+    onSnapshot(heaterDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+            const data = docSnap.data(); 
+            
+            // 1. Uppdatera stora knappen (PÅ/AV)
+            heaterBtn.textContent = data.status ? "PÅ" : "AV";
+            heaterBtn.className = data.status ? "btn-on" : "btn-off";
+            
+            // 2. Uppdatera timer-texten under knappen
+            if (data.timerActive && data.startTimer) {
+                timerStatusEl.textContent = `⏰ Startar kl. ${data.startTimer}`;
+                timerStatusEl.style.color = "#00f2ff"; // Snygg is-blå färg
+                cancelBtn.style.display = 'block';     // Visa "Avbryt"-knappen
+            } else {
+                timerStatusEl.textContent = "Ingen timer aktiv";
+                timerStatusEl.style.color = "rgba(255,255,255,0.5)";
+                cancelBtn.style.display = 'none';      // Dölj "Avbryt"-knappen
+            }
+        }
+    });
+}
 
   function setupFamilyListener() {
     onSnapshot(familyRef, (snapshot) => {
@@ -185,6 +305,20 @@
     });
   }
 
+  function sendNotification(temp){
+    if (Notification.permission === "granted"){
+      navigator.serviceWorker.ready.then((registration) => {
+        registration.showNotification("Väderlarm Älvsbyn! ❄️", {
+        body: `Det är ${temp}°C ute. Kom ihåg motorvärmaren!`,      
+        badge: "https://cdn-icons-png.flaticon.com/512/2322/2322701.png",
+        icon: "https://cdn-icons-png.flaticon.com/512/2322/2322701.png"
+        });
+      });
+    }
+  }
+
+  
+
   // 6. GLOBALA FUNKTIONER 
   window.updateHomeStatus = async (id, status) => {
     try {
@@ -210,7 +344,32 @@
     });
   }
 
-  setInterval(updateWeather, 1800000);
+  setInterval(updateWeather, 900000);
+
+  function startaLarm() {
+    console.log("Anrop lyckades! ");
+    
+    if (!("Notification" in window)) {
+        alert("Webbläsaren stöder inte aviseringar.");
+        return;
+    }
+
+    Notification.requestPermission().then(permission => {
+        if (permission === "granted") {
+            navigator.serviceWorker.ready.then(reg => {
+                reg.showNotification("Systemet är redo! ❄️", {
+                    body: "Nu är din Enhet kopplad till väderlarmet.",
+                    vibrate: [200, 100, 200]
+                });
+            });
+            alert("Klart! Nu finns appen under Inställningar > Aviseringar.");
+        } else {
+            alert("Behörighet nekad. Status: " + permission);
+        }
+    });
+}
+
+
 </script>
   
 </body>
